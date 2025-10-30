@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "aipexbase-mcp-server": {
+      "url": "http://172.20.10.2:8081/mcp/sse?token=kf_api_bryQJfbbLL2lSurMGJmbA6K34tNuM4A4"
+    }
+  }
+}
