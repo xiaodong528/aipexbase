@@ -73,6 +73,59 @@ AIPEXBASE 项目自动创建工具
         logger.error(f"创建项目失败: {e}")
         raise
 
+=== 异常处理 ===
+
+增强的异常系统提供结构化错误信息：
+
+**异常类层次：**
+- AIPEXBASEError          - 基础异常类，所有异常的父类
+  - AuthenticationError   - 认证失败（登录、token 等）
+  - APIError             - API 调用失败
+  - ConfigurationError   - 配置错误（环境变量等）
+
+**错误码系统：**
+- 1xxx: 认证相关（1001=登录失败, 1002=凭证无效, 1003=Token缺失, 1004=Token过期）
+- 2xxx: API相关（2001=请求失败, 2002=响应无效, 2003=超时, 2004=连接错误, 2005=Key未找到）
+- 3xxx: 配置相关（3001=环境变量缺失, 3002=配置值无效）
+- 4xxx/5xxx: HTTP错误
+
+**异常属性：**
+- code: 错误码（ErrorCode 枚举）
+- message: 错误消息
+- http_status: HTTP 状态码（如适用）
+- context: 上下文信息（如 email、app_id 等）
+- details: 详细信息（如 request、response）
+- original_error: 原始异常对象
+
+**使用示例：**
+
+基本捕获：
+    try:
+        client.login(email, password)
+    except AuthenticationError as e:
+        print(f"登录失败: {e}")  # 格式化输出：[1001] 登录失败 - email=user@example.com
+
+详细信息：
+    try:
+        result = client.create_project_complete("项目名称")
+    except APIError as e:
+        print(f"错误码: {e.code.value}")
+        print(f"HTTP状态: {e.http_status}")
+        print(f"上下文: {e.context}")
+        print(f"详细信息: {e.details}")
+        # JSON序列化
+        error_json = e.to_json(indent=2)
+        logger.error(error_json)
+
+捕获所有异常：
+    try:
+        result = create_project("项目")
+    except AIPEXBASEError as e:
+        # 统一处理所有 AIPEXBASE 异常
+        print(f"操作失败: {e}")
+        if e.original_error:
+            print(f"原因: {e.original_error}")
+
 === 功能说明 ===
 
 1. 从环境变量或 .env 文件读取配置
@@ -104,6 +157,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
+from enum import Enum
 
 try:
     import requests
@@ -116,6 +170,48 @@ except ImportError as e:
 
 # 初始化 colorama
 init(autoreset=True)
+
+
+# ============================================================================
+# 错误码枚举
+# ============================================================================
+
+class ErrorCode(str, Enum):
+    """
+    错误码枚举
+
+    错误码分类：
+    - 1xxx: 认证相关错误
+    - 2xxx: API调用相关错误
+    - 3xxx: 配置相关错误
+    - 4xxx/5xxx: HTTP相关错误
+    - 9xxx: 未知错误
+    """
+    # 认证相关 (1xxx)
+    AUTH_LOGIN_FAILED = "1001"
+    AUTH_INVALID_CREDENTIALS = "1002"
+    AUTH_TOKEN_MISSING = "1003"
+    AUTH_TOKEN_EXPIRED = "1004"
+
+    # API调用相关 (2xxx)
+    API_REQUEST_FAILED = "2001"
+    API_INVALID_RESPONSE = "2002"
+    API_TIMEOUT = "2003"
+    API_CONNECTION_ERROR = "2004"
+    API_KEY_NOT_FOUND = "2005"
+    API_APP_CREATION_FAILED = "2006"
+
+    # 配置相关 (3xxx)
+    CONFIG_MISSING_ENV = "3001"
+    CONFIG_INVALID_VALUE = "3002"
+
+    # HTTP相关 (4xxx/5xxx)
+    HTTP_4XX_ERROR = "4000"
+    HTTP_5XX_ERROR = "5000"
+    HTTP_UNKNOWN_ERROR = "4999"
+
+    # 未知错误 (9xxx)
+    UNKNOWN_ERROR = "9999"
 
 
 # ============================================================================
@@ -157,23 +253,311 @@ class ProjectCreationResult:
 # ============================================================================
 
 class AIPEXBASEError(Exception):
-    """AIPEXBASE 基础异常类"""
-    pass
+    """
+    AIPEXBASE 基础异常类（增强版）
+
+    功能：
+    - 错误码系统
+    - 结构化错误信息存储
+    - HTTP状态码支持
+    - 原始异常链
+    - JSON序列化
+    - 格式化输出
+
+    Attributes:
+        code: 错误码（ErrorCode枚举）
+        message: 错误消息
+        details: 详细信息字典
+        http_status: HTTP状态码（如果适用）
+        original_error: 原始异常对象
+        context: 额外上下文信息
+
+    Example:
+        >>> raise AIPEXBASEError(
+        ...     code=ErrorCode.API_REQUEST_FAILED,
+        ...     message="请求失败",
+        ...     http_status=500,
+        ...     context={'url': 'http://...', 'method': 'POST'}
+        ... )
+    """
+
+    # 默认错误码和消息模板（子类可覆盖）
+    default_code: ErrorCode = ErrorCode.UNKNOWN_ERROR
+    default_message: str = "发生了未知错误"
+
+    def __init__(
+        self,
+        message: Optional[str] = None,
+        code: Optional[ErrorCode] = None,
+        http_status: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None,
+        original_error: Optional[Exception] = None,
+        context: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ):
+        """
+        初始化异常
+
+        Args:
+            message: 错误消息（可选，默认使用类的 default_message）
+            code: 错误码（可选，默认使用类的 default_code）
+            http_status: HTTP状态码
+            details: 详细信息字典
+            original_error: 原始异常对象
+            context: 额外上下文信息（如URL、方法名等）
+            **kwargs: 其他扩展字段
+        """
+        # 使用提供的或默认的错误消息和错误码
+        self.message = message or self.default_message
+        self.code = code or self.default_code
+        self.http_status = http_status
+        self.details = details or {}
+        self.original_error = original_error
+        self.context = context or {}
+
+        # 存储额外的kwargs以便扩展
+        self.extra = kwargs
+
+        # 调用父类构造函数
+        super().__init__(self.message)
+
+    def __str__(self) -> str:
+        """字符串表示（用于日志）"""
+        parts = [f"[{self.code.value}] {self.message}"]
+
+        if self.http_status:
+            parts.append(f"(HTTP {self.http_status})")
+
+        if self.context:
+            context_str = ", ".join(f"{k}={v}" for k, v in self.context.items())
+            parts.append(f"- {context_str}")
+
+        if self.original_error:
+            parts.append(f"- Caused by: {type(self.original_error).__name__}: {self.original_error}")
+
+        return " ".join(parts)
+
+    def __repr__(self) -> str:
+        """开发者友好的表示"""
+        return (
+            f"{self.__class__.__name__}("
+            f"code={self.code.value!r}, "
+            f"message={self.message!r}, "
+            f"http_status={self.http_status!r})"
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        转换为字典（用于JSON序列化）
+
+        Returns:
+            包含所有错误信息的字典
+        """
+        result = {
+            'error_type': self.__class__.__name__,
+            'code': self.code.value,
+            'message': self.message,
+        }
+
+        if self.http_status:
+            result['http_status'] = self.http_status
+
+        if self.details:
+            result['details'] = self.details
+
+        if self.context:
+            result['context'] = self.context
+
+        if self.original_error:
+            result['original_error'] = {
+                'type': type(self.original_error).__name__,
+                'message': str(self.original_error)
+            }
+
+        if self.extra:
+            result['extra'] = self.extra
+
+        return result
+
+    def to_json(self, **kwargs) -> str:
+        """
+        转换为JSON字符串
+
+        Args:
+            **kwargs: 传递给 json.dumps 的参数
+
+        Returns:
+            JSON字符串
+        """
+        return json.dumps(self.to_dict(), ensure_ascii=False, **kwargs)
 
 
 class AuthenticationError(AIPEXBASEError):
-    """认证失败异常"""
-    pass
+    """
+    认证失败异常
+
+    用于登录失败、token缺失/过期等场景
+
+    Example:
+        >>> raise AuthenticationError(
+        ...     "登录失败：邮箱或密码错误",
+        ...     code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+        ...     context={'email': 'user@example.com'}
+        ... )
+    """
+    default_code = ErrorCode.AUTH_LOGIN_FAILED
+    default_message = "认证失败"
 
 
 class APIError(AIPEXBASEError):
-    """API 调用异常"""
-    pass
+    """
+    API 调用异常
+
+    用于API请求失败、响应异常等场景
+
+    Attributes:
+        request_data: 请求数据
+        response_data: 响应数据
+        endpoint: API端点
+
+    Example:
+        >>> raise APIError(
+        ...     "API请求失败",
+        ...     code=ErrorCode.API_REQUEST_FAILED,
+        ...     http_status=500,
+        ...     endpoint="/admin/application",
+        ...     request_data={'name': 'test'},
+        ...     response_data={'code': 1, 'message': 'error'}
+        ... )
+    """
+    default_code = ErrorCode.API_REQUEST_FAILED
+    default_message = "API调用失败"
+
+    def __init__(
+        self,
+        message: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        request_data: Optional[Dict[str, Any]] = None,
+        response_data: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ):
+        # 将API特定字段添加到context
+        context = kwargs.pop('context', {})
+        if endpoint:
+            context['endpoint'] = endpoint
+
+        details = kwargs.pop('details', {})
+        if request_data:
+            details['request'] = request_data
+        if response_data:
+            details['response'] = response_data
+
+        super().__init__(
+            message=message,
+            context=context,
+            details=details,
+            **kwargs
+        )
+
+        # 也存储为实例属性以便访问
+        self.endpoint = endpoint
+        self.request_data = request_data
+        self.response_data = response_data
 
 
 class ConfigurationError(AIPEXBASEError):
-    """配置错误异常"""
-    pass
+    """
+    配置错误异常
+
+    用于环境变量缺失、配置值无效等场景
+
+    Example:
+        >>> raise ConfigurationError(
+        ...     "缺少必要的环境变量: AIPEXBASE_BASE_URL",
+        ...     code=ErrorCode.CONFIG_MISSING_ENV,
+        ...     context={'missing_vars': ['AIPEXBASE_BASE_URL']}
+        ... )
+    """
+    default_code = ErrorCode.CONFIG_MISSING_ENV
+    default_message = "配置错误"
+
+
+# ============================================================================
+# 便捷构造函数
+# ============================================================================
+
+def from_requests_error(error: Exception, endpoint: str = "") -> APIError:
+    """
+    从 requests 异常创建 APIError
+
+    Args:
+        error: requests 异常对象
+        endpoint: API端点
+
+    Returns:
+        APIError实例
+
+    Example:
+        >>> try:
+        ...     response = requests.get(url)
+        ... except requests.exceptions.Timeout as e:
+        ...     raise from_requests_error(e, endpoint="/api/users")
+    """
+    if isinstance(error, requests.exceptions.Timeout):
+        return APIError(
+            message=f"请求超时: {endpoint}",
+            code=ErrorCode.API_TIMEOUT,
+            endpoint=endpoint,
+            original_error=error
+        )
+    elif isinstance(error, requests.exceptions.ConnectionError):
+        return APIError(
+            message="连接失败: 无法连接到服务器",
+            code=ErrorCode.API_CONNECTION_ERROR,
+            endpoint=endpoint,
+            original_error=error
+        )
+    elif isinstance(error, requests.exceptions.HTTPError):
+        http_status = error.response.status_code if error.response else None
+        response_text = error.response.text if error.response else ""
+        return APIError(
+            message=f"HTTP错误 {http_status}: {response_text}",
+            code=ErrorCode.HTTP_4XX_ERROR if http_status and http_status < 500 else ErrorCode.HTTP_5XX_ERROR,
+            http_status=http_status,
+            endpoint=endpoint,
+            original_error=error
+        )
+    else:
+        return APIError(
+            message=str(error),
+            code=ErrorCode.API_REQUEST_FAILED,
+            endpoint=endpoint,
+            original_error=error
+        )
+
+
+def from_api_response(response_data: Dict[str, Any], endpoint: str = "") -> APIError:
+    """
+    从API响应创建 APIError
+
+    Args:
+        response_data: API响应字典（包含 code 和 message 字段）
+        endpoint: API端点
+
+    Returns:
+        APIError实例
+
+    Example:
+        >>> result = {'code': 1, 'message': '参数错误'}
+        >>> raise from_api_response(result, endpoint="/admin/login")
+    """
+    error_msg = response_data.get('message', '未知API错误')
+    return APIError(
+        message=f"API错误: {error_msg}",
+        code=ErrorCode.API_INVALID_RESPONSE,
+        endpoint=endpoint,
+        response_data=response_data
+    )
 
 
 class AIPEXBASEClient:
@@ -214,7 +598,7 @@ class AIPEXBASEClient:
             响应 JSON 数据
 
         Raises:
-            Exception: 请求失败时抛出异常
+            APIError: 请求失败时抛出异常
         """
         url = f"{self.base_url}{endpoint}"
         headers = {}
@@ -237,19 +621,23 @@ class AIPEXBASEClient:
 
             # 检查业务状态码
             if result.get('code') != 0:
-                error_msg = result.get('message', '未知错误')
-                raise Exception(f"API 错误: {error_msg}")
+                raise from_api_response(result, endpoint=endpoint)
 
             return result
 
-        except requests.exceptions.Timeout:
-            raise Exception(f"请求超时: {url}")
-        except requests.exceptions.ConnectionError:
-            raise Exception(f"连接失败: 无法连接到 {self.base_url}")
+        except requests.exceptions.Timeout as e:
+            raise from_requests_error(e, endpoint=endpoint)
+        except requests.exceptions.ConnectionError as e:
+            raise from_requests_error(e, endpoint=endpoint)
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"HTTP 错误 {e.response.status_code}: {e.response.text}")
-        except json.JSONDecodeError:
-            raise Exception("服务器返回了无效的 JSON 响应")
+            raise from_requests_error(e, endpoint=endpoint)
+        except json.JSONDecodeError as e:
+            raise APIError(
+                message="服务器返回了无效的 JSON 响应",
+                code=ErrorCode.API_INVALID_RESPONSE,
+                endpoint=endpoint,
+                original_error=e
+            )
 
     def login(self, email: str, password: str) -> str:
         """
@@ -273,7 +661,11 @@ class AIPEXBASEClient:
         self.token = result.get('data')
 
         if not self.token:
-            raise Exception("登录失败: 未返回 token")
+            raise AuthenticationError(
+                "登录失败: 未返回 token",
+                code=ErrorCode.AUTH_LOGIN_FAILED,
+                context={'email': email}
+            )
 
         print(f"{Fore.GREEN}✓ 登录成功")
         return self.token
@@ -303,7 +695,12 @@ class AIPEXBASEClient:
         app_info = result.get('data')
 
         if not app_info or not app_info.get('appId'):
-            raise Exception("创建应用失败: 未返回 appId")
+            raise APIError(
+                "创建应用失败: 未返回 appId",
+                code=ErrorCode.API_APP_CREATION_FAILED,
+                endpoint="/admin/application",
+                request_data=data
+            )
 
         print(f"{Fore.GREEN}✓ 应用创建成功")
         print(f"  应用ID: {Fore.YELLOW}{app_info['appId']}")
@@ -344,7 +741,13 @@ class AIPEXBASEClient:
 
         success = result.get('data', False)
         if not success:
-            raise Exception("创建 API Key 失败")
+            raise APIError(
+                "创建 API Key 失败",
+                code=ErrorCode.API_REQUEST_FAILED,
+                endpoint=endpoint,
+                request_data=data,
+                context={'app_id': app_id}
+            )
 
         print(f"{Fore.GREEN}✓ API Key 生成成功")
         return True
