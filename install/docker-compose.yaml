@@ -36,8 +36,8 @@ services:
       - VITE_APP_TYPE=PC
       - VITE_APP_NAME=BAAS
       - VITE_APP_BASE_API=/baas-api
-      - VITE_APP_SERVICE_API=http://172.20.10.2:8081
-      - VITE_PROJECT_API_ENDPOINT=http://172.20.10.2:8081/baas-api
+      - VITE_APP_SERVICE_API=http://127.0.0.1:8081
+      - VITE_PROJECT_API_ENDPOINT=http://127.0.0.1:8081/baas-api
     ports:
       - "8081:80"  # 将 Nginx 映射到主机的 8081 端口
     depends_on:
