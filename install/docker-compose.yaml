@@ -1,4 +1,5 @@
-version: '3'
+name: aipexbase
+
 services:
   backend-new:
     image: swr.cn-east-3.myhuaweicloud.com/kuafuai/aipexbase-backend:20251022-78649e0a3d864d70e19c541957f6afbfffeb826f
@@ -8,6 +9,7 @@ services:
       - DB_USERNAME=root
       - DB_DATABASE=aipexbase
       - CHANNEL=docker
+      - JAVA_OPTS=-Xms512m -Xmx2g  # 降低内存配置：初始512MB，最大2GB
     expose:
       - "8080"  # 暴露 Java 应用的 8080 端口
     volumes:
